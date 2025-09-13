@@ -1,26 +1,43 @@
 import re
 import os
-from flask import Flask, request, jsonify, Response
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 from yt_dlp import YoutubeDL
 import requests
-from flask_cors import CORS
+from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
+# Muat environment variables dari file .env
 load_dotenv()
 
-app = Flask(__name__)
-CORS(app, resources={r"/api/*": {"origins": os.getenv('FRONTEND_URL')}})
+# --- Inisialisasi Aplikasi FastAPI ---
+app = FastAPI()
 
-# Endpoint untuk mengambil metadata video
-@app.route("/api/video-info", methods=["POST"])
-def get_video_info():
-    # Mengambil 'url' dari body JSON, mirip dengan req.body
-    data = request.get_json()
-    url = data.get("url")
+# --- Konfigurasi CORS ---
+# Ambil URL frontend dari environment variable
+frontend_url = os.getenv('FRONTEND_URL')
+origins = []
+if frontend_url:
+    origins.append(frontend_url)
+# Tambahkan origin lain jika perlu, misalnya untuk development
+# origins.append("http://localhost:5173") 
 
-    if not url:
-        return jsonify({"error": "URL wajib diisi!"}), 400
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins , # Izinkan origin spesifik atau semua jika tidak diset
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
+# --- Model Pydantic untuk Validasi Request Body ---
+class VideoRequest(BaseModel):
+    url: str
+
+# --- Endpoint untuk mengambil metadata video ---
+@app.post("/api/video-info")
+async def get_video_info(request: VideoRequest):
     YDL_OPTIONS = {
         'dump_single_json': True,
         'no_check_certificates': True,
@@ -29,12 +46,9 @@ def get_video_info():
     }
 
     try:
-        # Menggunakan yt-dlp untuk mengambil metadata
         with YoutubeDL(YDL_OPTIONS) as ydl:
-            metadata = ydl.extract_info(url, download=False)
+            metadata = ydl.extract_info(request.url, download=False)
 
-            # Membuat struktur respons, mirip dengan kode JS Anda
-            # List comprehension di bawah ini setara dengan .map() di JS
             video_info = {
                 "title": metadata.get("title"),
                 "thumbnail": metadata.get("thumbnail"),
@@ -46,46 +60,40 @@ def get_video_info():
                         "resolution": f.get("resolution"),
                         "url": f.get("url"),
                     }
-                    for f in metadata.get("formats", [])
+                    for f in metadata.get("formats", []) if f.get("url") # Pastikan format punya URL
                 ],
             }
-
-        return jsonify({"message": "success", "data": video_info}), 200
+        return {"message": "success", "data": video_info}
 
     except Exception as e:
         print(f"Error saat mengambil info video: {e}")
-        return jsonify({"error": str(e)}), 500
+        raise HTTPException(status_code=500, detail=str(e))
 
-
-# Endpoint untuk men-download/stream video
-@app.route("/api/video-download", methods=["GET"])
-def download_video():
-    # Mengambil 'url' dan 'title' dari query parameter, mirip dengan req.query
-    video_url = request.args.get("url")
-    title = request.args.get("title")
-
-    if not video_url:
-        return jsonify({"error": "URL download wajib diisi!"}), 400
-
+# --- Endpoint untuk men-download/stream video ---
+@app.get("/api/video-download")
+async def download_video(
+    url: str = Query(..., description="URL video untuk di-download"),
+    title: str | None = Query(default="video", description="Judul untuk nama file")
+):
     try:
-        # Membersihkan judul file, mirip dengan replace() di JS
-        safe_title = re.sub(r'[^a-z0-9]', '_', (title or "video").lower())
+        safe_title = re.sub(r'[^a-z0-9]', '_', title.lower())
+        
+        # requests.get akan mengunduh seluruh file jika stream=False,
+        # jadi kita buat generator untuk streaming
+        def stream_content():
+            with requests.get(url, stream=True) as req:
+                req.raise_for_status() # Cek jika ada error HTTP
+                for chunk in req.iter_content(chunk_size=8192):
+                    yield chunk
 
-        # Melakukan streaming download dengan library requests
-        # Ini setara dengan axios stream dan pipe di Node.js
-        req = requests.get(video_url, stream=True)
-
-        return Response(
-            req.iter_content(chunk_size=1024),
-            content_type="video/mp4",
-            headers={"Content-Disposition": f"attachment; filename=\"{safe_title}.mp4\""}
-        )
+        headers = {"Content-Disposition": f"attachment; filename=\"{safe_title}.mp4\""}
+        return StreamingResponse(stream_content(), media_type="video/mp4", headers=headers)
 
     except Exception as e:
         print(f"Error saat proxy download: {e}")
-        return jsonify({"success": False, "message": "internal server error"}), 500
+        raise HTTPException(status_code=500, detail="Internal server error")
 
-
-# Menjalankan aplikasi jika file ini dieksekusi langsung
-if __name__ == "__main__":
-    app.run(debug=True)
+# Endpoint root untuk verifikasi
+@app.get("/")
+async def root():
+ return {"message": "FastAPI server for yt-dlp is running!"}
