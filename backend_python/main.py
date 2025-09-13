@@ -7,6 +7,7 @@ from yt_dlp import YoutubeDL
 import requests
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
+import tempfile
 
 # Muat environment variables dari file .env
 load_dotenv()
@@ -44,8 +45,20 @@ async def get_video_info(request: VideoRequest):
         'warnings': 'no',
         'prefer_free_formats': True,
     }
+    
+    cookies_content = os.getenv('YOUTUBE_COOKIES_CONTENT')
+    cookie_file_path = None
 
     try:
+        if cookies_content:
+            # Buat file sementara yang aman di direktori /tmp
+            with tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix='.txt', encoding='utf-8') as temp_cookie_file:
+                temp_cookie_file.write(cookies_content)
+                cookie_file_path = temp_cookie_file.name
+            
+            # Tambahkan path file cookie ke opsi yt-dlp
+            YDL_OPTIONS['cookiefile'] = cookie_file_path
+            
         with YoutubeDL(YDL_OPTIONS) as ydl:
             metadata = ydl.extract_info(request.url, download=False)
 
