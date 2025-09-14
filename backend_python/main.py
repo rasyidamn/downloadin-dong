@@ -44,6 +44,7 @@ async def get_video_info(request: VideoRequest):
         'no_check_certificates': True,
         'warnings': 'no',
         'prefer_free_formats': True,
+        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36'
     }
     
     cookies_content = os.getenv('YOUTUBE_COOKIES_CONTENT')
